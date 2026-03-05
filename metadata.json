@@ -1,0 +1,7 @@
+{
+  "name": "方脸健身",
+  "description": "您的私人全栈 AI 健身教练，提供个性化训练、饮食计划及进度追踪。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
