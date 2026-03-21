@@ -3,19 +3,33 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import multer from "multer";
 import cors from "cors";
 import fs from "fs";
+import dotenv from "dotenv";
+import { ProxyAgent, setGlobalDispatcher } from "undici";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+dotenv.config();
+
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+if (proxyUrl) {
+  setGlobalDispatcher(new ProxyAgent(proxyUrl));
+}
+
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const uploadsDir = path.join(__dirname, "uploads");
+const AI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
 
 app.use(express.json({ limit: '50mb' }));
 app.use(cors());
+fs.mkdirSync(uploadsDir, { recursive: true });
+app.use("/uploads", express.static(uploadsDir));
 
 // --- Database Setup ---
 const db = new Database("fitness.db");
@@ -61,7 +75,30 @@ db.exec(`
 `);
 
 // --- AI Setup ---
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const geminiApiKey = process.env.GEMINI_API_KEY;
+const genAI = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
+
+function getAiErrorMessage(error: unknown) {
+  if (!geminiApiKey) {
+    return "AI 服务尚未配置完成，请稍后再试。";
+  }
+
+  const message = error instanceof Error ? error.message : "Internal Server Error";
+  const causeCode =
+    typeof error === "object" && error && "cause" in error && typeof (error as any).cause?.code === "string"
+      ? (error as any).cause.code
+      : "";
+
+  if (message.includes("fetch failed") || causeCode === "UND_ERR_CONNECT_TIMEOUT") {
+    return "当前服务器网络无法连接 AI 服务，请检查网络或代理设置后重试。";
+  }
+
+  if (message.includes("API key")) {
+    return "AI 服务密钥无效或不可用，请检查配置。";
+  }
+
+  return "AI 服务暂时不可用，请稍后再试。";
+}
 
 // --- API Routes ---
 
@@ -113,6 +150,10 @@ app.get("/api/plan/:userId", (req, res) => {
 // AI Chat
 app.post("/api/chat", async (req, res) => {
   try {
+    if (!genAI) {
+      return res.status(500).json({ error: getAiErrorMessage(null) });
+    }
+
     const { userId, message, profile, history, todayLog } = req.body;
     
     const systemInstruction = `你是一位顶级的AI健身教练，擅长“维度博弈”——即根据用户的身体、心理、环境等多维度条件，动态制定可持续的训练、恢复、饮食和情绪管理计划。
@@ -164,7 +205,7 @@ app.post("/api/chat", async (req, res) => {
     `;
 
     const response = await genAI.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: AI_MODEL,
       contents: [{ role: "user", parts: [{ text: message }] }],
       config: {
         systemInstruction,
@@ -175,25 +216,29 @@ app.post("/api/chat", async (req, res) => {
     const result = JSON.parse(response.text || "{}");
     
     // If a new plan is generated, save it
-    if (result.payload?.plan) {
+    if (result.payload?.plan_update) {
       db.prepare(`
         INSERT INTO plans (user_id, data, updated_at)
         VALUES (?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = CURRENT_TIMESTAMP
-      `).run(userId, JSON.stringify(result.payload.plan));
+      `).run(userId, JSON.stringify(result.payload.plan_update));
     }
 
     res.json(result);
   } catch (error) {
     console.error("Chat Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ error: getAiErrorMessage(error) });
   }
 });
 
 // Photo Analysis
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ dest: uploadsDir });
 app.post("/api/analyze-photo", upload.single("photo"), async (req: any, res) => {
   try {
+    if (!genAI) {
+      return res.status(500).json({ error: getAiErrorMessage(null) });
+    }
+
     const { userId, profile } = req.body;
     const photo = req.file;
     if (!photo) return res.status(400).json({ error: "No photo uploaded" });
@@ -216,7 +261,7 @@ app.post("/api/analyze-photo", upload.single("photo"), async (req: any, res) => 
     `;
 
     const response = await genAI.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: AI_MODEL,
       contents: [{
         parts: [
           { text: prompt },
@@ -235,13 +280,17 @@ app.post("/api/analyze-photo", upload.single("photo"), async (req: any, res) => 
     res.json(analysis);
   } catch (error) {
     console.error("Photo Analysis Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ error: getAiErrorMessage(error) });
   }
 });
 
 // Replan
 app.post("/api/replan", async (req, res) => {
   try {
+    if (!genAI) {
+      return res.status(500).json({ error: getAiErrorMessage(null) });
+    }
+
     const { userId, profile, logs, currentPlan } = req.body;
     
     const prompt = `根据用户过去两周的打卡记录和当前计划，生成下一周的优化计划。
@@ -257,7 +306,7 @@ app.post("/api/replan", async (req, res) => {
     `;
 
     const response = await genAI.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: AI_MODEL,
       contents: [{ parts: [{ text: prompt }] }],
       config: { responseMimeType: "application/json" }
     });
@@ -275,7 +324,7 @@ app.post("/api/replan", async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Replan Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.status(500).json({ error: getAiErrorMessage(error) });
   }
 });
 
@@ -311,5 +360,5 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://localhost:\${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });

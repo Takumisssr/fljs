@@ -1,32 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
-import { 
-  Dumbbell, 
-  MessageSquare, 
-  Calendar, 
-  ClipboardList, 
-  User, 
-  ChevronRight, 
-  Plus, 
-  Camera, 
-  CheckCircle2, 
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import {
   AlertCircle,
-  Loader2,
-  ArrowLeft,
-  Settings,
+  Calendar,
+  Camera,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardList,
   Image as ImageIcon,
-  TrendingUp,
-  Heart,
-  Utensils,
-  Moon,
+  Loader2,
+  MessageSquare,
+  Settings,
+  User,
   Zap,
-  Smile,
-  Clock,
-  Scale,
-  Activity,
-  Coffee
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -34,7 +21,8 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// --- Types ---
+type Tone = 'strict' | 'gentle' | 'data';
+
 interface Profile {
   goal: string;
   subGoal: string;
@@ -46,13 +34,12 @@ interface Profile {
   diet: string;
   allergies: string;
   budget: string;
-  gender?: 'male' | 'female';
-  period?: boolean;
   workTime: string;
   bodyFat?: number;
   cooking: boolean;
   experience: string;
-  tone: 'strict' | 'gentle' | 'data';
+  tone: Tone;
+  weight?: number;
 }
 
 interface Plan {
@@ -61,67 +48,129 @@ interface Plan {
   recovery: string;
 }
 
-interface Log {
-  weight: number;
-  bodyFat?: number;
-  sleepHours: number;
-  mood: string;
-  completion: number;
-  notes: string;
+interface LogEntry {
+  id: number;
+  date: string;
+  data: {
+    weight: number;
+    sleepHours: number;
+    mood: string;
+    completion: number;
+    notes?: string;
+  };
 }
 
-// --- Components ---
+interface AlbumItem {
+  id: number;
+  filename: string;
+  analysis: {
+    observations?: string;
+    focus_areas?: string;
+    shooting_guide?: string;
+  };
+  created_at: string;
+}
 
-const Layout = ({ children }: { children: React.ReactNode }) => {
+interface AssistantMessage {
+  role: 'assistant';
+  assistant_text?: string;
+  error?: string;
+  payload?: {
+    warnings?: string[];
+    followup_questions?: string[];
+  };
+}
+
+interface UserMessage {
+  role: 'user';
+  text: string;
+}
+
+type ChatMessage = AssistantMessage | UserMessage;
+
+const USER_ID_KEY = 'fitness_user_id';
+
+function getUserId() {
+  const existing = window.localStorage.getItem(USER_ID_KEY);
+  if (existing) return existing;
+  const created = `user_${crypto.randomUUID()}`;
+  window.localStorage.setItem(USER_ID_KEY, created);
+  return created;
+}
+
+async function apiRequest<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init);
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json() : await response.text();
+
+  if (!response.ok) {
+    const message =
+      typeof data === 'string'
+        ? data
+        : data?.error || data?.message || `请求失败：${response.status}`;
+    throw new Error(message);
+  }
+
+  return data as T;
+}
+
+function useUserId() {
+  return useMemo(() => getUserId(), []);
+}
+
+function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navItems = [
-    { path: '/chat', icon: MessageSquare, label: '教练' },
+    { path: '/chat', icon: MessageSquare, label: '聊天' },
     { path: '/plan', icon: Calendar, label: '计划' },
     { path: '/log', icon: ClipboardList, label: '打卡' },
     { path: '/album', icon: ImageIcon, label: '相册' },
   ];
 
-  if (location.pathname === '/onboarding') return <>{children}</>;
+  if (location.pathname === '/onboarding') {
+    return <>{children}</>;
+  }
 
   return (
-    <div className="min-h-screen bg-zinc-50 flex flex-col pb-20">
-      <header className="bg-white border-b border-zinc-200 px-4 py-3 sticky top-0 z-10">
-        <div className="max-w-md mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
-            <Zap className="w-6 h-6 text-emerald-500 fill-emerald-500" />
-            方脸健身 AI
-          </h1>
+    <div className="min-h-screen bg-zinc-50 pb-20">
+      <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
-            <Link to="/settings" className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
-              <Settings className="w-5 h-5 text-zinc-600" />
+            <Zap className="h-6 w-6 fill-emerald-500 text-emerald-500" />
+            <div>
+              <h1 className="text-lg font-semibold text-zinc-900">方练健身 AI</h1>
+              <p className="text-xs text-zinc-500">训练、饮食、恢复建议</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/settings" className="rounded-full p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900">
+              <Settings className="h-5 w-5" />
             </Link>
-            <Link to="/onboarding" className="p-2 hover:bg-zinc-100 rounded-full transition-colors">
-              <User className="w-5 h-5 text-zinc-600" />
+            <Link to="/onboarding" className="rounded-full p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900">
+              <User className="h-5 w-5" />
             </Link>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 max-w-md mx-auto w-full p-4">
-        {children}
-      </main>
+      <main className="mx-auto max-w-3xl px-4 py-4">{children}</main>
 
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-200 px-6 py-2 z-10">
-        <div className="max-w-md mx-auto flex justify-around items-center">
+      <nav className="fixed bottom-0 left-0 right-0 border-t border-zinc-200 bg-white">
+        <div className="mx-auto flex max-w-3xl justify-around px-4 py-2">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const active = location.pathname === item.path;
             return (
               <Link
                 key={item.path}
                 to={item.path}
                 className={cn(
-                  "flex flex-col items-center gap-1 p-2 transition-colors",
-                  isActive ? "text-emerald-600" : "text-zinc-400 hover:text-zinc-600"
+                  'flex flex-col items-center gap-1 rounded-xl px-4 py-2 text-xs font-medium transition',
+                  active ? 'text-emerald-600' : 'text-zinc-500 hover:text-zinc-900',
                 )}
               >
-                <Icon className="w-6 h-6" />
-                <span className="text-xs font-medium">{item.label}</span>
+                <Icon className="h-5 w-5" />
+                {item.label}
               </Link>
             );
           })}
@@ -129,706 +178,537 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
       </nav>
     </div>
   );
-};
+}
 
-const Onboarding = () => {
-  const [step, setStep] = useState(0);
-  const [profile, setProfile] = useState<Partial<Profile>>({
-    goal: 'health',
-    tone: 'gentle',
+function Onboarding() {
+  const userId = useUserId();
+  const navigate = useNavigate();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [profile, setProfile] = useState<Profile>({
+    goal: '减脂',
+    subGoal: '建立可持续习惯',
     timePerDay: 30,
     equipment: [],
+    injuries: '',
+    sleep: '7小时',
+    stress: '中等',
+    diet: '正常饮食',
+    allergies: '',
+    budget: '中等',
+    workTime: '朝九晚六',
     cooking: true,
-    experience: 'beginner',
+    experience: '新手',
+    tone: 'gentle',
+    weight: 70,
+    bodyFat: 25,
   });
 
-  const steps = [
-    { title: '您的核心目标？', field: 'goal', options: ['健康', '减肥', '美观增肌', '提升运动技能'] },
-    { title: '更细化的目标？', field: 'subGoal', options: ['减脂增肌', '头脑清醒', '延缓衰老', '对抗疾病', '提升表现', '改善睡眠'] },
-    { title: '您的工作时间？', field: 'workTime', options: ['朝九晚五', '弹性工作', '自由职业', '学生'] },
-    { title: '您的当前体重 (kg)？', field: 'weight', type: 'number' },
-    { title: '您的体脂率 (%)？', field: 'bodyFat', type: 'number' },
-    { title: '抗压能力/心理状况？', field: 'stress', options: ['压力极大', '一般', '轻松'] },
-    { title: '是否会做饭？', field: 'cooking', options: [{value: true, label: '会做饭'}, {value: false, label: '外卖/食堂'}] },
-    { title: '资金状况/预算？', field: 'budget', options: ['紧凑', '中等', '充足'] },
-    { title: '训练经验？', field: 'experience', options: ['小白', '入门', '进阶', '大神'] },
-    { title: '教练语气风格？', field: 'tone', options: [
-      { value: 'strict', label: '严厉监督型' },
-      { value: 'gentle', label: '温柔陪伴型' },
-      { value: 'data', label: '数据教练型' },
-    ]},
-  ];
-
-  const handleNext = async () => {
-    if (step < steps.length - 1) {
-      setStep(step + 1);
-    } else {
-      const userId = 'user_123'; // Mock userId
-      await fetch('/api/profile', {
+  async function handleSubmit() {
+    setSubmitting(true);
+    setError('');
+    try {
+      await apiRequest('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, profile }),
       });
-      window.location.href = '/chat';
+      navigate('/chat');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存资料失败');
+    } finally {
+      setSubmitting(false);
     }
-  };
-
-  const currentStep = steps[step];
+  }
 
   return (
-    <div className="min-h-screen bg-white p-6 flex flex-col">
-      <div className="flex-1 max-w-md mx-auto w-full pt-12">
-        <div className="mb-8">
-          <div className="h-1 w-full bg-zinc-100 rounded-full overflow-hidden">
-            <motion.div 
-              className="h-full bg-emerald-500"
-              initial={{ width: 0 }}
-              animate={{ width: `\${((step + 1) / steps.length) * 100}%` }}
-            />
-          </div>
-          <p className="text-sm text-zinc-400 mt-2">步骤 {step + 1} / {steps.length}</p>
-        </div>
-
-        <h2 className="text-2xl font-bold text-zinc-900 mb-6">{currentStep.title}</h2>
-
-        <div className="space-y-3">
-          {currentStep.options ? (
-            currentStep.options.map((opt: any) => {
-              const val = typeof opt === 'string' ? opt : opt.value;
-              const label = typeof opt === 'string' ? opt : opt.label;
-              const isSelected = Array.isArray(profile[currentStep.field as keyof Profile]) 
-                ? (profile[currentStep.field as keyof Profile] as string[]).includes(val)
-                : profile[currentStep.field as keyof Profile] === val;
-
-              return (
-                <button
-                  key={val}
-                  onClick={() => {
-                    if (currentStep.type === 'multi') {
-                      const current = (profile[currentStep.field as keyof Profile] as string[]) || [];
-                      setProfile({ ...profile, [currentStep.field]: current.includes(val) ? current.filter(v => v !== val) : [...current, val] });
-                    } else {
-                      setProfile({ ...profile, [currentStep.field]: val });
-                    }
-                  }}
-                  className={cn(
-                    "w-full p-4 rounded-xl border-2 text-left transition-all",
-                    isSelected ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-zinc-100 hover:border-zinc-200 text-zinc-600"
-                  )}
-                >
-                  {label}
-                </button>
-              );
-            })
-          ) : (
-            <input
-              type={currentStep.type || 'text'}
-              placeholder={(currentStep as any).placeholder || ''}
-              className="w-full p-4 rounded-xl border-2 border-zinc-100 focus:border-emerald-500 outline-none transition-all"
-              value={profile[currentStep.field as keyof Profile] as any || ''}
-              onChange={(e) => setProfile({ ...profile, [currentStep.field]: e.target.value })}
-            />
-          )}
-        </div>
+    <div className="mx-auto max-w-xl space-y-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div>
+        <h2 className="text-2xl font-semibold text-zinc-900">先完善你的训练资料</h2>
+        <p className="mt-2 text-sm text-zinc-500">保存后，你的训练建议、计划和打卡会自动同步。</p>
       </div>
 
-      <div className="max-w-md mx-auto w-full pt-6">
-        <button
-          onClick={handleNext}
-          className="w-full bg-zinc-900 text-white p-4 rounded-xl font-bold flex justify-center items-center gap-2 hover:bg-zinc-800 transition-colors"
-        >
-          {step === steps.length - 1 ? '完成建档' : '下一步'}
-          <ChevronRight className="w-5 h-5" />
-        </button>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>目标</span>
+          <input className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.goal} onChange={(e) => setProfile({ ...profile, goal: e.target.value })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>细分目标</span>
+          <input className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.subGoal} onChange={(e) => setProfile({ ...profile, subGoal: e.target.value })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>每天训练时长（分钟）</span>
+          <input type="number" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.timePerDay} onChange={(e) => setProfile({ ...profile, timePerDay: Number(e.target.value) })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>体重（kg）</span>
+          <input type="number" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.weight || ''} onChange={(e) => setProfile({ ...profile, weight: Number(e.target.value) })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>体脂（%）</span>
+          <input type="number" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.bodyFat || ''} onChange={(e) => setProfile({ ...profile, bodyFat: Number(e.target.value) })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>工作节奏</span>
+          <input className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.workTime} onChange={(e) => setProfile({ ...profile, workTime: e.target.value })} />
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>训练经验</span>
+          <select className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.experience} onChange={(e) => setProfile({ ...profile, experience: e.target.value })}>
+            <option value="新手">新手</option>
+            <option value="入门">入门</option>
+            <option value="进阶">进阶</option>
+          </select>
+        </label>
+        <label className="space-y-2 text-sm text-zinc-700">
+          <span>教练语气</span>
+          <select className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.tone} onChange={(e) => setProfile({ ...profile, tone: e.target.value as Tone })}>
+            <option value="gentle">温和</option>
+            <option value="strict">严格</option>
+            <option value="data">数据型</option>
+          </select>
+        </label>
       </div>
+
+      <label className="space-y-2 text-sm text-zinc-700">
+        <span>伤病或限制</span>
+        <textarea className="min-h-24 w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={profile.injuries} onChange={(e) => setProfile({ ...profile, injuries: e.target.value })} />
+      </label>
+
+      {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div> : null}
+
+      <button onClick={handleSubmit} disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-zinc-900 px-4 py-4 font-medium text-white transition hover:bg-zinc-800 disabled:opacity-60">
+        {submitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <ChevronRight className="h-5 w-5" />}
+        保存并开始使用
+      </button>
     </div>
   );
-};
+}
 
-const ChatCard = ({ card }: { card: any }) => {
-  switch (card.type) {
-    case 'plan_card':
-      return (
-        <div className="bg-zinc-900 text-white p-4 rounded-2xl space-y-3 mt-2 shadow-lg">
-          <div className="flex items-center gap-2 border-b border-white/10 pb-2">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-bold uppercase tracking-wider">训练计划</span>
-          </div>
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-emerald-400">今日: {card.data.today}</div>
-            <div className="text-xs text-zinc-400 line-clamp-2">本周: {card.data.week}</div>
-            <div className="text-xs text-emerald-500 font-bold mt-1">📈 预估: {card.data.prediction}</div>
-          </div>
-          <Link to="/plan" className="block text-center text-xs bg-white/10 py-2 rounded-lg hover:bg-white/20 transition-colors">查看完整计划</Link>
-        </div>
-      );
-    case 'posture_card':
-      return (
-        <div className="bg-white border border-zinc-200 p-4 rounded-2xl space-y-3 mt-2">
-          <div className="flex items-center gap-2 text-zinc-900">
-            <Camera className="w-4 h-4 text-blue-500" />
-            <span className="text-xs font-bold uppercase tracking-wider">体态分析</span>
-          </div>
-          <p className="text-xs text-zinc-600">{card.data.observations}</p>
-          <div className="flex gap-2">
-            <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded-full font-bold">优先级: {card.data.priority}</span>
-          </div>
-        </div>
-      );
-    case 'calorie_card':
-      return (
-        <div className="bg-orange-50 border border-orange-100 p-4 rounded-2xl space-y-2 mt-2">
-          <div className="flex items-center gap-2 text-orange-700">
-            <Utensils className="w-4 h-4" />
-            <span className="text-xs font-bold uppercase tracking-wider">热量估算</span>
-          </div>
-          <div className="text-lg font-bold text-orange-900">{card.data.estimate}</div>
-          <p className="text-xs text-orange-600">{card.data.macros}</p>
-        </div>
-      );
-    case 'photo_guide_card':
-      return (
-        <div className="bg-zinc-50 border border-zinc-200 p-4 rounded-2xl space-y-2 mt-2">
-          <div className="flex items-center gap-2 text-zinc-700">
-            <Camera className="w-4 h-4" />
-            <span className="text-xs font-bold uppercase tracking-wider">拍照指导</span>
-          </div>
-          <p className="text-xs text-zinc-600 leading-relaxed">{card.data.tips}</p>
-        </div>
-      );
-    default:
-      return null;
-  }
-};
-
-const Chat = () => {
-  const [messages, setMessages] = useState<any[]>([]);
+function Chat() {
+  const userId = useUserId();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [pageError, setPageError] = useState('');
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    fetch('/api/profile/user_123').then(res => res.json()).then(setProfile);
-  }, []);
+    apiRequest<Profile | null>(`/api/profile/${userId}`)
+      .then((data) => {
+        setProfile(data);
+        setProfileLoaded(true);
+      })
+      .catch((err) => {
+        setPageError(err instanceof Error ? err.message : '加载资料失败');
+        setProfileLoaded(true);
+      });
+  }, [userId]);
 
-  const handleSend = async (textOverride?: string) => {
-    const text = textOverride || input;
-    if (!text.trim() || !profile) return;
-    
-    const userMsg = { role: 'user', text };
-    setMessages(prev => [...prev, userMsg]);
+  async function sendMessage(textOverride?: string) {
+    const text = (textOverride ?? input).trim();
+    if (!text || !profile || loading) return;
+
+    const nextMessages = [...messages, { role: 'user', text } as UserMessage];
+    setMessages(nextMessages);
     setInput('');
     setLoading(true);
 
     try {
-      const res = await fetch('/api/chat', {
+      const data = await apiRequest<AssistantMessage>('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'user_123',
+          userId,
           message: text,
           profile,
-          history: messages,
+          history: nextMessages,
         }),
       });
-      const data = await res.json();
-      setMessages(prev => [...prev, { role: 'assistant', ...data }]);
+      setMessages((current) => [...current, { role: 'assistant', ...data }]);
     } catch (err) {
-      console.error(err);
+      const message = err instanceof Error ? err.message : '聊天失败，请稍后再试';
+      setMessages((current) => [...current, { role: 'assistant', error: message }]);
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  async function uploadPhoto(file: File) {
+    if (!profile) return;
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('photo', file);
+      formData.append('userId', userId);
+      formData.append('profile', JSON.stringify(profile));
+
+      const result = await apiRequest<AlbumItem['analysis']>('/api/analyze-photo', {
+        method: 'POST',
+        body: formData,
+      });
+
+      setMessages((current) => [
+        ...current,
+        { role: 'user', text: `已上传照片：${file.name}` },
+        {
+          role: 'assistant',
+          assistant_text: result.observations || result.focus_areas || '照片分析已完成，你可以去相册页查看记录。',
+          payload: {
+            warnings: result.shooting_guide ? [`拍摄建议：${result.shooting_guide}`] : [],
+          },
+        },
+      ]);
+    } catch (err) {
+      setMessages((current) => [
+        ...current,
+        { role: 'assistant', error: err instanceof Error ? err.message : '上传照片失败' },
+      ]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  if (!profileLoaded) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="space-y-4 rounded-3xl border border-zinc-200 bg-white p-6">
+        <p className="text-sm text-red-600">{pageError || '还没有用户资料，请先填写。'}</p>
+        <Link to="/onboarding" className="inline-flex rounded-xl bg-zinc-900 px-4 py-3 text-sm font-medium text-white">
+          去填写资料
+        </Link>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-10rem)]">
-      <div className="flex-1 overflow-y-auto space-y-4 pb-4 scrollbar-hide">
-        {messages.length === 0 && (
-          <div className="text-center py-12">
-            <div className="bg-emerald-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Zap className="w-8 h-8 text-emerald-600 fill-emerald-600" />
+    <div className="space-y-4">
+      <section className="rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-semibold text-zinc-900">AI 教练聊天</h2>
+        <p className="mt-2 text-sm text-zinc-500">告诉我你的目标、状态或问题，我会给你训练、饮食和恢复建议。</p>
+      </section>
+
+      <section className="space-y-3 rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm">
+        {messages.length === 0 ? (
+          <div className="space-y-3 py-10 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+              <Zap className="h-7 w-7 fill-emerald-500 text-emerald-500" />
             </div>
-            <h3 className="text-lg font-bold text-zinc-900">方脸健身 AI 教练</h3>
-            <p className="text-zinc-500 text-sm px-8">基于维度博弈理论，为您提供可持续的健身、饮食与情绪管理建议。</p>
-            <div className="mt-6 flex flex-wrap justify-center gap-2 px-4">
-              {['生成今日计划', '分析体态照片', '估算餐食热量', '心情不太好'].map(q => (
-                <button 
-                  key={q} 
-                  onClick={() => handleSend(q)}
-                  className="text-xs bg-white border border-zinc-200 px-3 py-2 rounded-full text-zinc-600 hover:border-emerald-500 hover:text-emerald-600 transition-all"
-                >
-                  {q}
+            <h3 className="text-lg font-semibold text-zinc-900">开始一次训练对话</h3>
+            <div className="flex flex-wrap justify-center gap-2">
+              {['帮我生成今天的训练计划', '今天状态一般该怎么练', '帮我估算减脂饮食', '给我一份恢复建议'].map((item) => (
+                <button key={item} onClick={() => void sendMessage(item)} className="rounded-full border border-zinc-200 px-4 py-2 text-sm text-zinc-600 transition hover:border-emerald-500 hover:text-emerald-600">
+                  {item}
                 </button>
               ))}
             </div>
           </div>
-        )}
-        {messages.map((msg, i) => (
-          <div key={i} className={cn("flex flex-col", msg.role === 'user' ? "items-end" : "items-start")}>
-            <div className={cn(
-              "max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed",
-              msg.role === 'user' ? "bg-emerald-500 text-white rounded-tr-none shadow-sm" : "bg-white border border-zinc-200 text-zinc-800 rounded-tl-none shadow-sm"
-            )}>
-              {msg.assistant_text || msg.text}
-              
-              {msg.payload?.warnings?.map((w: string, idx: number) => (
-                <div key={idx} className="mt-2 flex items-start gap-1.5 text-[10px] text-red-500 bg-red-50 p-2 rounded-lg border border-red-100">
-                  <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
-                  <span>{w}</span>
-                </div>
-              ))}
-
-              {msg.payload?.cards?.map((card: any, idx: number) => (
-                <div key={idx}>
-                  <ChatCard card={card} />
-                </div>
-              ))}
-
-              {msg.payload?.followup_questions?.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {msg.payload.followup_questions.map((q: string, idx: number) => (
-                    <button 
-                      key={idx}
-                      onClick={() => handleSend(q)}
-                      className="text-[10px] bg-zinc-100 text-zinc-600 px-2 py-1 rounded-md hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              )}
+        ) : (
+          messages.map((message, index) => (
+            <div key={index} className={cn('flex', message.role === 'user' ? 'justify-end' : 'justify-start')}>
+              <div className={cn('max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6', message.role === 'user' ? 'rounded-tr-sm bg-emerald-500 text-white' : 'rounded-tl-sm border border-zinc-200 bg-zinc-50 text-zinc-800')}>
+                {'text' in message ? message.text : message.assistant_text || message.error || '暂无返回内容'}
+                {'error' in message && message.error ? (
+                  <div className="mt-2 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-red-600">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{message.error}</span>
+                  </div>
+                ) : null}
+                {'payload' in message && message.payload?.warnings?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {message.payload.warnings.map((warning) => (
+                      <div key={warning} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+                        {warning}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {'payload' in message && message.payload?.followup_questions?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {message.payload.followup_questions.map((question) => (
+                      <button key={question} onClick={() => void sendMessage(question)} className="rounded-full bg-white px-3 py-1 text-xs text-zinc-700 ring-1 ring-zinc-200 transition hover:text-emerald-600">
+                        {question}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-zinc-200 p-3 rounded-2xl rounded-tl-none">
-              <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />
-            </div>
-          </div>
+          ))
         )}
-      </div>
 
-      <div className="pt-4">
-        <div className="relative">
+        {loading ? <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" />AI 正在思考</div> : null}
+        {uploading ? <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" />正在上传并分析照片</div> : null}
+
+        <div className="flex gap-2 pt-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="输入文字或上传照片..."
-            className="w-full bg-white border border-zinc-200 p-4 pr-12 rounded-2xl outline-none focus:border-emerald-500 transition-all text-sm shadow-sm"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void sendMessage();
+            }}
+            placeholder="输入你的问题，比如今天练什么、怎么吃、哪里酸痛"
+            className="flex-1 rounded-2xl border border-zinc-200 px-4 py-3 outline-none transition focus:border-emerald-500"
           />
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-            <button className="p-2 text-zinc-400 hover:text-emerald-500 transition-colors">
-              <Camera className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => handleSend()}
-              disabled={loading}
-              className="p-2 bg-zinc-900 text-white rounded-xl disabled:opacity-50"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void uploadPhoto(file);
+            }}
+          />
+          <button onClick={() => fileInputRef.current?.click()} className="rounded-2xl border border-zinc-200 px-4 py-3 text-zinc-600 transition hover:border-emerald-500 hover:text-emerald-600" title="上传照片分析">
+            <Camera className="h-5 w-5" />
+          </button>
+          <button onClick={() => void sendMessage()} disabled={loading || uploading} className="rounded-2xl bg-zinc-900 px-4 py-3 text-white transition hover:bg-zinc-800 disabled:opacity-60">
+            <ChevronRight className="h-5 w-5" />
+          </button>
         </div>
-      </div>
+      </section>
     </div>
   );
-};
+}
 
-const PlanView = () => {
+function PlanView() {
+  const userId = useUserId();
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'today' | 'week' | 'month'>('today');
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    fetch('/api/plan/user_123').then(res => res.json()).then(data => {
-      setPlan(data);
-      setLoading(false);
-    });
-  }, []);
+    apiRequest<Plan | null>(`/api/plan/${userId}`)
+      .then(setPlan)
+      .catch((err) => setError(err instanceof Error ? err.message : '加载计划失败'));
+  }, [userId]);
 
-  if (loading) return <div className="flex justify-center py-12"><Loader2 className="animate-spin text-zinc-400" /></div>;
-
-  if (!plan) return (
-    <div className="text-center py-12">
-      <Calendar className="w-12 h-12 text-zinc-200 mx-auto mb-4" />
-      <p className="text-zinc-500">暂无今日计划</p>
-      <Link to="/chat" className="text-emerald-500 font-medium mt-2 inline-block">去和教练聊聊生成计划</Link>
-    </div>
-  );
+  if (error) return <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-600">{error}</div>;
+  if (!plan) {
+    return (
+      <div className="rounded-3xl border border-zinc-200 bg-white p-6 text-center shadow-sm">
+        <Calendar className="mx-auto h-10 w-10 text-zinc-300" />
+        <p className="mt-3 text-sm text-zinc-500">还没有训练计划，去聊天页生成一份吧。</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex bg-white p-1 rounded-xl border border-zinc-200">
-        {(['today', 'week', 'month'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
-              tab === t ? "bg-zinc-900 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-600"
-            )}
-          >
-            {t === 'today' ? '今日' : t === 'week' ? '7日' : '4周'}
-          </button>
-        ))}
-      </div>
-
-      <section className="bg-white p-5 rounded-2xl border border-zinc-200 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Dumbbell className="w-5 h-5 text-emerald-500" />
-            <h3 className="font-bold text-zinc-900">训练内容</h3>
-          </div>
-          {tab === 'today' && <span className="text-[10px] bg-emerald-50 text-emerald-600 px-2 py-1 rounded-full font-bold">维度博弈优化中</span>}
-        </div>
-        <div className="prose prose-sm text-zinc-600 whitespace-pre-wrap leading-relaxed">
-          {tab === 'today' ? plan.workout : tab === 'week' ? "本周重点：渐进负荷与核心稳定。\n1-3天：力量训练\n4天：主动恢复\n5-7天：有氧与灵活性" : "本月目标：体脂下降2%，肌肉量维持。\n第一阶段：适应期\n第二阶段：强化期\n第三阶段：冲刺期\n第四阶段：减量周"}
-        </div>
-        {tab === 'today' && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button className="text-[10px] bg-zinc-100 px-3 py-1.5 rounded-full text-zinc-600 font-bold hover:bg-zinc-200 transition-colors">替代动作</button>
-            <button className="text-[10px] bg-zinc-100 px-3 py-1.5 rounded-full text-zinc-600 font-bold hover:bg-zinc-200 transition-colors">只有20分钟</button>
-            <button className="text-[10px] bg-zinc-100 px-3 py-1.5 rounded-full text-zinc-600 font-bold hover:bg-zinc-200 transition-colors">器械不全</button>
-          </div>
-        )}
-      </section>
-
-      <section className="bg-white p-5 rounded-2xl border border-zinc-200 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <Utensils className="w-5 h-5 text-orange-500" />
-          <h3 className="font-bold text-zinc-900">营养与补剂</h3>
-        </div>
-        <div className="prose prose-sm text-zinc-600 whitespace-pre-wrap leading-relaxed">{plan.meals}</div>
-        <p className="mt-3 text-[10px] text-zinc-400 italic">依据医学界最新实验数据：蛋白质摄入建议为 1.6g/kg 体重。</p>
-      </section>
-
-      <section className="bg-white p-5 rounded-2xl border border-zinc-200 shadow-sm">
-        <div className="flex items-center gap-2 mb-4">
-          <Moon className="w-5 h-5 text-blue-500" />
-          <h3 className="font-bold text-zinc-900">恢复与心理</h3>
-        </div>
-        <div className="prose prose-sm text-zinc-600 whitespace-pre-wrap leading-relaxed">{plan.recovery}</div>
-      </section>
+    <div className="space-y-4">
+      {[
+        ['训练安排', plan.workout],
+        ['饮食建议', plan.meals],
+        ['恢复建议', plan.recovery],
+      ].map(([title, content]) => (
+        <section key={title} className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <h3 className="text-lg font-semibold text-zinc-900">{title}</h3>
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-600">{content}</p>
+        </section>
+      ))}
     </div>
   );
-};
+}
 
-const LogView = () => {
-  const [logs, setLogs] = useState<any[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [newLog, setNewLog] = useState<Partial<Log>>({
+function LogView() {
+  const userId = useUserId();
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({
     weight: 70,
     sleepHours: 8,
-    mood: 'happy',
-    completion: 100,
+    mood: 'normal',
+    completion: 80,
     notes: '',
   });
 
-  useEffect(() => {
-    fetch('/api/logs/user_123').then(res => res.json()).then(setLogs);
-  }, []);
-
-  const handleSubmit = async () => {
-    const date = new Date().toISOString().split('T')[0];
-    await fetch('/api/logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 'user_123', date, log: newLog }),
-    });
-    setShowForm(false);
-    fetch('/api/logs/user_123').then(res => res.json()).then(setLogs);
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
-          <div className="flex items-center gap-2 text-zinc-400 mb-1">
-            <TrendingUp className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase">训练完成率</span>
-          </div>
-          <div className="text-2xl font-bold text-zinc-900">85%</div>
-          <div className="text-[10px] text-emerald-500 font-bold mt-1">↑ 12% vs 上周</div>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
-          <div className="flex items-center gap-2 text-zinc-400 mb-1">
-            <Scale className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase">体重趋势</span>
-          </div>
-          <div className="text-2xl font-bold text-zinc-900">-1.2kg</div>
-          <div className="text-[10px] text-zinc-400 font-bold mt-1">近7天变化</div>
-        </div>
-      </div>
-
-      <div className="flex justify-between items-center">
-        <h2 className="text-lg font-bold text-zinc-900">打卡日记</h2>
-        <button 
-          onClick={() => setShowForm(true)}
-          className="bg-emerald-500 text-white p-2 rounded-full shadow-lg hover:bg-emerald-600 transition-colors"
-        >
-          <Plus className="w-6 h-6" />
-        </button>
-      </div>
-
-      <AnimatePresence>
-        {showForm && (
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-2xl fixed inset-x-4 bottom-24 z-20 max-w-md mx-auto"
-          >
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-lg">今日状态打卡</h3>
-              <button onClick={() => setShowForm(false)} className="text-zinc-400 p-2">取消</button>
-            </div>
-            
-            <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">体重 (kg)</label>
-                  <input 
-                    type="number" 
-                    className="w-full p-3 bg-zinc-50 rounded-xl border-none mt-1 focus:ring-2 ring-emerald-500/20 outline-none" 
-                    value={newLog.weight} 
-                    onChange={e => setNewLog({...newLog, weight: Number(e.target.value)})}
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">睡眠时长 (h)</label>
-                  <input 
-                    type="number" 
-                    className="w-full p-3 bg-zinc-50 rounded-xl border-none mt-1 focus:ring-2 ring-emerald-500/20 outline-none" 
-                    value={newLog.sleepHours} 
-                    onChange={e => setNewLog({...newLog, sleepHours: Number(e.target.value)})}
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">心情状态</label>
-                <div className="flex justify-between mt-2">
-                  {['happy', 'neutral', 'sad', 'stressed'].map(m => (
-                    <button 
-                      key={m}
-                      onClick={() => setNewLog({...newLog, mood: m})}
-                      className={cn(
-                        "p-3 rounded-xl border-2 transition-all",
-                        newLog.mood === m ? "border-emerald-500 bg-emerald-50" : "border-zinc-100"
-                      )}
-                    >
-                      {m === 'happy' ? <Smile className="w-6 h-6 text-emerald-500" /> : 
-                       m === 'neutral' ? <Smile className="w-6 h-6 text-zinc-400" /> :
-                       m === 'sad' ? <Smile className="w-6 h-6 text-blue-400" /> :
-                       <AlertCircle className="w-6 h-6 text-red-400" />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">训练完成度 ({newLog.completion}%)</label>
-                <input 
-                  type="range" 
-                  className="w-full mt-2 accent-emerald-500" 
-                  min="0" max="100" 
-                  value={newLog.completion} 
-                  onChange={e => setNewLog({...newLog, completion: Number(e.target.value)})}
-                />
-              </div>
-              <button 
-                onClick={handleSubmit}
-                className="w-full bg-zinc-900 text-white p-4 rounded-2xl font-bold mt-4 shadow-lg active:scale-[0.98] transition-all"
-              >
-                提交今日数据
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <div className="space-y-4">
-        {logs.map((log, i) => (
-          <div key={i} className="bg-white p-4 rounded-2xl border border-zinc-100 flex items-center gap-4 shadow-sm">
-            <div className="bg-zinc-50 p-3 rounded-xl text-center min-w-[60px]">
-              <p className="text-[10px] font-bold text-zinc-400 uppercase">{log.date.split('-')[1]}月</p>
-              <p className="text-xl font-bold text-zinc-900">{log.date.split('-')[2]}</p>
-            </div>
-            <div className="flex-1">
-              <div className="flex justify-between items-center">
-                <p className="font-bold text-zinc-800">{log.data.weight} kg</p>
-                <div className="flex items-center gap-1">
-                   {log.data.mood === 'happy' ? <Smile className="w-4 h-4 text-emerald-500" /> : <Smile className="w-4 h-4 text-zinc-300" />}
-                   <span className="text-[10px] text-zinc-400">{log.data.sleepHours}h 睡眠</span>
-                </div>
-              </div>
-              <div className="h-1.5 w-full bg-zinc-100 rounded-full mt-2 overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }}
-                  animate={{ width: `${log.data.completion}%` }}
-                  className="h-full bg-emerald-500 rounded-full" 
-                />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const AlbumView = () => {
-  const [photos, setPhotos] = useState<any[]>([]);
-  const [compare, setCompare] = useState<number[]>([]);
+  async function loadLogs() {
+    try {
+      const data = await apiRequest<LogEntry[]>(`/api/logs/${userId}`);
+      setLogs(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载打卡失败');
+    }
+  }
 
   useEffect(() => {
-    fetch('/api/album/user_123').then(res => res.json()).then(setPhotos);
-  }, []);
+    void loadLogs();
+  }, [userId]);
 
-  const toggleCompare = (id: number) => {
-    if (compare.includes(id)) setCompare(compare.filter(i => i !== id));
-    else if (compare.length < 2) setCompare([...compare, id]);
-  };
+  async function submitLog() {
+    setSaving(true);
+    setError('');
+    try {
+      await apiRequest('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          date: new Date().toISOString().split('T')[0],
+          log: form,
+        }),
+      });
+      await loadLogs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存打卡失败');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-lg font-bold text-zinc-900">相册日记</h2>
-        <button className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full">
-          {compare.length === 2 ? '开始对比' : '选择两张对比'}
-        </button>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        {photos.length === 0 && [1,2,3,4,5,6].map(i => (
-          <div key={i} className="aspect-square bg-zinc-100 rounded-xl flex items-center justify-center">
-            <ImageIcon className="w-6 h-6 text-zinc-300" />
-          </div>
-        ))}
-        {photos.map((p, i) => (
-          <div 
-            key={i} 
-            onClick={() => toggleCompare(p.id)}
-            className={cn(
-              "aspect-square bg-zinc-200 rounded-xl relative overflow-hidden cursor-pointer border-2 transition-all",
-              compare.includes(p.id) ? "border-emerald-500 scale-[0.95]" : "border-transparent"
-            )}
-          >
-            <img src={`/uploads/${p.filename}`} alt="Progress" className="w-full h-full object-cover" />
-            <div className="absolute bottom-1 left-1 bg-black/50 text-white text-[8px] px-1 rounded">
-              {new Date(p.created_at).toLocaleDateString()}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <section className="bg-zinc-900 text-white p-5 rounded-2xl space-y-3">
-        <div className="flex items-center gap-2">
-          <Camera className="w-5 h-5 text-emerald-400" />
-          <h3 className="font-bold">拍照指导</h3>
+    <div className="space-y-4">
+      <section className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-zinc-900">今日打卡</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="space-y-2 text-sm"><span>体重（kg）</span><input type="number" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={form.weight} onChange={(e) => setForm({ ...form, weight: Number(e.target.value) })} /></label>
+          <label className="space-y-2 text-sm"><span>睡眠（小时）</span><input type="number" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={form.sleepHours} onChange={(e) => setForm({ ...form, sleepHours: Number(e.target.value) })} /></label>
+          <label className="space-y-2 text-sm">
+            <span>心情</span>
+            <select className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={form.mood} onChange={(e) => setForm({ ...form, mood: e.target.value })}>
+              <option value="great">很好</option>
+              <option value="normal">一般</option>
+              <option value="tired">疲惫</option>
+              <option value="stressed">压力大</option>
+            </select>
+          </label>
+          <label className="space-y-2 text-sm"><span>完成度（%）</span><input type="number" min="0" max="100" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={form.completion} onChange={(e) => setForm({ ...form, completion: Number(e.target.value) })} /></label>
         </div>
-        <ul className="text-xs text-zinc-400 space-y-2">
-          <li className="flex gap-2"><CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" /> 同一时间（建议晨起空腹）</li>
-          <li className="flex gap-2"><CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" /> 同一位置、同一光线</li>
-          <li className="flex gap-2"><CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" /> 保持自然站姿，手机高度在腰部</li>
-        </ul>
+
+        <label className="mt-4 block space-y-2 text-sm">
+          <span>备注</span>
+          <textarea className="min-h-24 w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+        </label>
+
+        {error ? <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">{error}</div> : null}
+        <button onClick={() => void submitLog()} disabled={saving} className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-60">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+          保存今日打卡
+        </button>
+      </section>
+
+      <section className="space-y-3 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-zinc-900">历史记录</h3>
+        {logs.length === 0 ? <p className="text-sm text-zinc-500">还没有历史打卡。</p> : null}
+        {logs.map((log) => (
+          <div key={log.id} className="rounded-2xl border border-zinc-100 bg-zinc-50 p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-zinc-900">{log.date}</span>
+              <span className="text-xs text-zinc-500">完成度 {log.data.completion}%</span>
+            </div>
+            <p className="mt-2 text-sm text-zinc-600">体重 {log.data.weight}kg，睡眠 {log.data.sleepHours}h，心情 {log.data.mood}</p>
+          </div>
+        ))}
       </section>
     </div>
   );
-};
+}
 
-const SettingsView = () => {
+function AlbumView() {
+  const userId = useUserId();
+  const [photos, setPhotos] = useState<AlbumItem[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    apiRequest<AlbumItem[]>(`/api/album/${userId}`)
+      .then(setPhotos)
+      .catch((err) => setError(err instanceof Error ? err.message : '加载相册失败'));
+  }, [userId]);
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-zinc-900">照片分析记录</h2>
+        <p className="mt-2 text-sm text-zinc-500">在聊天页点击相机按钮上传照片后，这里会自动显示分析记录。</p>
+      </section>
+
+      {error ? <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-sm text-red-600">{error}</div> : null}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {photos.map((photo) => (
+          <article key={photo.id} className="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+            <img src={`/uploads/${photo.filename}`} alt="训练照片" className="h-64 w-full object-cover" />
+            <div className="space-y-3 p-5">
+              <p className="text-xs text-zinc-500">{new Date(photo.created_at).toLocaleString()}</p>
+              <p className="text-sm text-zinc-700">{photo.analysis.observations || photo.analysis.focus_areas || '已完成分析'}</p>
+              {photo.analysis.shooting_guide ? <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">拍摄建议：{photo.analysis.shooting_guide}</div> : null}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {photos.length === 0 && !error ? <div className="rounded-3xl border border-dashed border-zinc-300 bg-zinc-50 p-10 text-center text-sm text-zinc-500">暂时还没有照片记录。</div> : null}
+    </div>
+  );
+}
+
+function SettingsView() {
+  const userId = useUserId();
   const [settings, setSettings] = useState({
     tone: 'gentle',
     pushTime: '08:00',
-    frequency: 'daily',
     companionMode: false,
   });
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
 
-  const handleSave = async () => {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 'user_123', settings }),
-    });
-    alert('设置已保存');
-  };
+  async function handleSave() {
+    setSaving(true);
+    setMessage('');
+    try {
+      await apiRequest('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, settings }),
+      });
+      setMessage('设置已保存');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '保存设置失败');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-bold text-zinc-900">设置</h2>
-      
-      <div className="space-y-4">
-        <section className="bg-white p-4 rounded-2xl border border-zinc-200 space-y-4">
-          <div>
-            <label className="text-xs font-bold text-zinc-400 uppercase">教练语气风格</label>
-            <div className="grid grid-cols-3 gap-2 mt-2">
-              {['strict', 'gentle', 'data'].map(t => (
-                <button
-                  key={t}
-                  onClick={() => setSettings({...settings, tone: t as any})}
-                  className={cn(
-                    "py-2 text-[10px] font-bold rounded-lg border-2 transition-all",
-                    settings.tone === t ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-100 text-zinc-400"
-                  )}
-                >
-                  {t === 'strict' ? '严厉型' : t === 'gentle' ? '温柔型' : '数据型'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between py-2 border-t border-zinc-100">
-            <div className="flex items-center gap-2">
-              <Heart className="w-5 h-5 text-pink-500" />
-              <span className="text-sm font-medium">陪伴模式 (多共情，少计划)</span>
-            </div>
-            <button 
-              onClick={() => setSettings({...settings, companionMode: !settings.companionMode})}
-              className={cn(
-                "w-12 h-6 rounded-full transition-all relative",
-                settings.companionMode ? "bg-emerald-500" : "bg-zinc-200"
-              )}
-            >
-              <div className={cn(
-                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all",
-                settings.companionMode ? "right-1" : "left-1"
-              )} />
-            </button>
-          </div>
-
-          <div className="space-y-2 border-t border-zinc-100 pt-4">
-            <label className="text-xs font-bold text-zinc-400 uppercase">计划推送时间</label>
-            <input 
-              type="time" 
-              className="w-full p-3 bg-zinc-50 rounded-xl border-none mt-1" 
-              value={settings.pushTime}
-              onChange={e => setSettings({...settings, pushTime: e.target.value})}
-            />
-          </div>
-        </section>
-
-        <button 
-          onClick={handleSave}
-          className="w-full bg-zinc-900 text-white p-4 rounded-2xl font-bold shadow-lg"
-        >
-          保存设置
-        </button>
-
-        <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-          <div className="flex items-center gap-2 text-emerald-700 mb-2">
-            <Zap className="w-4 h-4" />
-            <span className="text-xs font-bold">模拟推送队列</span>
-          </div>
-          <p className="text-[10px] text-emerald-600 leading-relaxed">
-            系统将在每日 {settings.pushTime} 自动为您生成并推送今日博弈计划。
-            当前语气：{settings.tone === 'strict' ? '严厉监督' : settings.tone === 'gentle' ? '温柔陪伴' : '客观数据'}。
-          </p>
-        </div>
-      </div>
+    <div className="space-y-4 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <h2 className="text-xl font-semibold text-zinc-900">设置</h2>
+      <label className="space-y-2 text-sm">
+        <span>教练语气</span>
+        <select className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={settings.tone} onChange={(e) => setSettings({ ...settings, tone: e.target.value })}>
+          <option value="gentle">温和</option>
+          <option value="strict">严格</option>
+          <option value="data">数据型</option>
+        </select>
+      </label>
+      <label className="space-y-2 text-sm">
+        <span>提醒时间</span>
+        <input type="time" className="w-full rounded-xl border border-zinc-200 px-4 py-3 outline-none focus:border-emerald-500" value={settings.pushTime} onChange={(e) => setSettings({ ...settings, pushTime: e.target.value })} />
+      </label>
+      <label className="flex items-center justify-between rounded-2xl border border-zinc-200 px-4 py-3 text-sm">
+        <span>陪伴模式</span>
+        <input type="checkbox" checked={settings.companionMode} onChange={(e) => setSettings({ ...settings, companionMode: e.target.checked })} />
+      </label>
+      {message ? <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">{message}</div> : null}
+      <button onClick={() => void handleSave()} disabled={saving} className="inline-flex items-center gap-2 rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-60">
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Settings className="h-4 w-4" />}
+        保存设置
+      </button>
     </div>
   );
-};
+}
 
 export default function App() {
   return (
